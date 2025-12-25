@@ -1,144 +1,124 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { initUpload, uploadChunk } from "../api/uploadApi";
 import toast from "react-hot-toast";
 
 const CHUNK_SIZE = 5 * 1024 * 1024;
-const MAX_CONCURRENCY = Number(import.meta.env.VITE_MAX_CONCURRENCY) || 3;
+const MAX_CONCURRENCY = 3;
 const MAX_RETRIES = 3;
 
 export function useUploader() {
-    /* ---------- STATE ---------- */
     const [chunks, setChunks] = useState([]);
     const [progress, setProgress] = useState(0);
     const [speed, setSpeed] = useState(0);
     const [eta, setEta] = useState(0);
     const [isPaused, setIsPaused] = useState(false);
     const [uploadId, setUploadId] = useState(null);
-
-    /* ---------- REFS ---------- */
     const queueRef = useRef([]);
     const activeRef = useRef(0);
     const uploadedBytesRef = useRef(0);
     const startTimeRef = useRef(0);
-    const fileRef = useRef(null);
     const uploadIdRef = useRef(null);
-    const pausedRef = useRef(false);
-    const completionShownRef = useRef(false);
+    const fileRef = useRef(null);
 
-    /* ---------- COMPLETION ---------- */
-    useEffect(() => {
-        if (
-            chunks.length &&
-            chunks.every(c => c.status === "success") &&
-            !completionShownRef.current
-        ) {
-            completionShownRef.current = true;
-            toast.success("Upload completed successfully 🎉");
-        }
-    }, [chunks]);
+    const pausedRef = useRef(false);
+    const cancelledRef = useRef(false);
+    const completionShownRef = useRef(false);
 
     useEffect(() => {
         pausedRef.current = isPaused;
     }, [isPaused]);
 
-    /* ---------- CORE WORKER ---------- */
+    useEffect(() => {
+        const done =
+            chunks.length > 0 &&
+            chunks.every(c => c.status === "success");
+
+        if (done && !completionShownRef.current) {
+            toast.success("Upload completed 🎉");
+            completionShownRef.current = true;
+        }
+    }, [chunks]);
+
     const runWorker = async () => {
-        while (
-            !pausedRef.current &&
-            activeRef.current < MAX_CONCURRENCY &&
-            queueRef.current.length
-        ) {
-            const chunk = queueRef.current.shift();
-            activeRef.current++;
+        if (pausedRef.current || cancelledRef.current) return;
+        if (activeRef.current >= MAX_CONCURRENCY) return;
+        if (!queueRef.current.length) return;
 
-            setChunks(prev =>
-                prev.map(c =>
-                    c.index === chunk.index
-                        ? { ...c, status: "uploading" }
-                        : c
-                )
-            );
+        const item = queueRef.current.shift();
+        activeRef.current++;
 
-            const start = chunk.index * CHUNK_SIZE;
-            const end = Math.min(start + CHUNK_SIZE, fileRef.current.size);
-            const blob = fileRef.current.slice(start, end);
+        setChunks(prev =>
+            prev.map(c =>
+                c.index === item.index ? { ...c, status: "uploading" } : c
+            )
+        );
 
-            let success = false;
+        const start = item.index * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, fileRef.current.size);
+        const blob = fileRef.current.slice(start, end);
 
-            for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-                try {
-                    await uploadChunk({
-                        uploadId: uploadIdRef.current,
-                        chunk: blob,
-                        index: chunk.index
-                    });
+        let attempt = 0;
 
-                    uploadedBytesRef.current += blob.size;
+        while (attempt < MAX_RETRIES && !cancelledRef.current) {
+            try {
+                await uploadChunk({
+                    uploadId: uploadIdRef.current,
+                    chunk: blob,
+                    index: item.index
+                });
 
-                    const elapsed = (Date.now() - startTimeRef.current) / 1000;
-                    const bps = uploadedBytesRef.current / Math.max(elapsed, 1);
+                uploadedBytesRef.current += blob.size;
 
-                    setSpeed(bps / (1024 * 1024));
-                    setProgress(
-                        Math.floor(
-                            (uploadedBytesRef.current / fileRef.current.size) * 100
-                        )
-                    );
-                    setEta(
-                        Math.max(
-                            0,
-                            (fileRef.current.size - uploadedBytesRef.current) / bps
-                        )
-                    );
+                const elapsed = (performance.now() - startTimeRef.current) / 1000;
+                const bps = uploadedBytesRef.current / elapsed;
 
-                    setChunks(prev =>
-                        prev.map(c =>
-                            c.index === chunk.index
-                                ? { ...c, status: "success" }
-                                : c
-                        )
-                    );
+                setSpeed(bps / (1024 * 1024));
+                setProgress(
+                    Math.round((uploadedBytesRef.current / fileRef.current.size) * 100)
+                );
+                setEta(bps > 0 ? (fileRef.current.size - uploadedBytesRef.current) / bps : 0);
 
-                    success = true;
-                    break;
-                } catch {
-                    if (attempt < MAX_RETRIES) {
-                        await new Promise(r =>
-                            setTimeout(r, 2 ** attempt * 500)
-                        );
-                    }
-                }
-            }
-
-            if (!success) {
                 setChunks(prev =>
                     prev.map(c =>
-                        c.index === chunk.index
-                            ? { ...c, status: "error" }
-                            : c
+                        c.index === item.index ? { ...c, status: "success" } : c
                     )
                 );
+                break;
+            } catch {
+                attempt++;
+                if (attempt === MAX_RETRIES) {
+                    setChunks(prev =>
+                        prev.map(c =>
+                            c.index === item.index ? { ...c, status: "error" } : c
+                        )
+                    );
+                }
             }
+        }
 
-            activeRef.current--;
+        activeRef.current--;
+        if (!pausedRef.current && !cancelledRef.current) {
+            runWorker();
         }
     };
 
-    /* ---------- START ---------- */
-    const uploadFile = async file => {
+    const uploadFile = useCallback(async (file) => {
         completionShownRef.current = false;
+        cancelledRef.current = false;
+        pausedRef.current = false;
 
-        fileRef.current = file;
-        startTimeRef.current = Date.now();
-        uploadedBytesRef.current = 0;
+        startTimeRef.current = performance.now();
 
+        setUploadId(null);
         setProgress(0);
         setSpeed(0);
         setEta(0);
         setIsPaused(false);
 
-        const { uploadId: id, receivedChunks = [] } = await initUpload(file);
+        fileRef.current = file;
+        uploadedBytesRef.current = 0;
 
+        const { uploadId: id, receivedChunks = [] } = await initUpload(file);
         uploadIdRef.current = id;
         setUploadId(id);
 
@@ -154,63 +134,42 @@ export function useUploader() {
         for (let i = 0; i < MAX_CONCURRENCY; i++) {
             runWorker();
         }
-    };
+    }, []);
 
-    /* ---------- PAUSE / RESUME ---------- */
+
     const pause = () => {
         pausedRef.current = true;
         setIsPaused(true);
-        toast("Upload paused ⏸️");
+        toast("Paused ⏸️");
     };
 
     const resume = () => {
         pausedRef.current = false;
         setIsPaused(false);
-
-        queueRef.current = chunks
-            .filter(c => c.status === "pending" || c.status === "error")
-            .map(c => ({ ...c, status: "pending" }));
-
-        setChunks(prev =>
-            prev.map(c =>
-                c.status === "error" ? { ...c, status: "pending" } : c
-            )
+        queueRef.current = chunks.filter(
+            c => c.status === "pending" || c.status === "error"
         );
-
-        toast("Upload resumed ▶️");
-
+        toast("Resumed ▶️");
         for (let i = 0; i < MAX_CONCURRENCY; i++) {
             runWorker();
         }
     };
 
-    const reset = () => {
-        fileRef.current = null;
-        uploadIdRef.current = null;
+    const cancel = () => {
+        cancelledRef.current = true;
         queueRef.current = [];
-        activeRef.current = 0;
-        uploadedBytesRef.current = 0;
-        completionShownRef.current = false;
-
-        setChunks([]);
-        setProgress(0);
-        setSpeed(0);
-        setEta(0);
-        setUploadId(null);
-        setIsPaused(false);
     };
-
 
     return {
         uploadFile,
         pause,
         resume,
+        cancel,
+        isPaused,
         chunks,
         progress,
         speed,
         eta,
-        uploadId,
-        isPaused,
-        reset
+        uploadId
     };
 }
