@@ -19,43 +19,70 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 /* ================= INIT UPLOAD ================= */
 
 export async function initUpload(req, res) {
-    const { filename, size } = req.body;
-    const fileKey = `${filename}:${size}`;
-    const totalChunks = Math.ceil(size / CHUNK_SIZE);
+    try {
+        if (!req.body || !req.body.filename || !req.body.size) {
+            return res.status(400).json({
+                error: "filename and size are required"
+            });
+        }
 
-    const generatedId = crypto.randomUUID();
+        const { filename, size } = req.body;
+        const fileKey = `${filename}:${size}`;
+        const totalChunks = Math.ceil(size / CHUNK_SIZE);
+        const generatedId = crypto.randomUUID();
 
-    // Atomic insert (no race)
-    await db.execute(
-        `
-    INSERT INTO uploads (id, file_key, filename, total_size, total_chunks)
-    VALUES (?, ?, ?, ?, ?)
-    ON DUPLICATE KEY UPDATE id = id
-    `,
-        [generatedId, fileKey, filename, size, totalChunks]
-    );
+        /* ---------- Upload row (idempotent) ---------- */
+        await db.execute(
+            `
+      INSERT INTO uploads (id, file_key, filename, total_size, total_chunks)
+      VALUES (?, ?, ?, ?, ?)
+      ON DUPLICATE KEY UPDATE id = id
+      `,
+            [generatedId, fileKey, filename, size, totalChunks]
+        );
 
-    // Always fetch the canonical upload
-    const [[upload]] = await db.execute(
-        `SELECT id FROM uploads WHERE file_key=?`,
-        [fileKey]
-    );
+        /* ---------- Fetch canonical upload ---------- */
+        const [[upload]] = await db.execute(
+            `SELECT id FROM uploads WHERE file_key=?`,
+            [fileKey]
+        );
 
-    // Fetch completed chunks
-    const [rows] = await db.execute(
-        `
-    SELECT chunk_index
-    FROM chunks
-    WHERE upload_id=? AND status='SUCCESS'
-    `,
-        [upload.id]
-    );
+        /* ---------- SAFELY create chunk metadata ---------- */
+        for (let i = 0; i < totalChunks; i++) {
+            await db.execute(
+                `
+        INSERT IGNORE INTO chunks (upload_id, chunk_index)
+        VALUES (?, ?)
+        `,
+                [upload.id, i]
+            );
+        }
 
-    res.json({
-        uploadId: upload.id,
-        receivedChunks: rows.map(r => r.chunk_index)
-    });
+        /* ---------- Fetch completed chunks ---------- */
+        const [rows] = await db.execute(
+            `
+      SELECT chunk_index
+      FROM chunks
+      WHERE upload_id=? AND status='SUCCESS'
+      `,
+            [upload.id]
+        );
+
+        return res.json({
+            uploadId: upload.id,
+            receivedChunks: rows.map(r => r.chunk_index)
+        });
+
+    } catch (err) {
+        console.error("initUpload error:", err);
+        return res.status(500).json({
+            error: "Failed to initialize upload"
+        });
+    }
 }
+
+
+
 
 
 

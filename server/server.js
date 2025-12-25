@@ -3,6 +3,7 @@ import uploadRoutes from "./src/routes/uploadRoute.js";
 import dotenv from "dotenv";
 dotenv.config();
 import cors from "cors";
+import { cleanupStaleUploads } from "./src/services/cleanupService.js"
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -20,7 +21,7 @@ app.use("/upload", uploadRoutes);
 async function startCleanupJob() {
   for (let i = 0; i < 5; i++) {
     try {
-      await cleanupStaleUploads();
+       await cleanupStaleUploads();
       console.log("Cleanup job started");
       return;
     } catch (err) {
@@ -35,5 +36,5 @@ startCleanupJob();
 
 
 app.listen(PORT, () => {
-    console.log(`Backend running on port: ${PORT}`);
+  console.log(`Backend running on port: ${PORT}`);
 });

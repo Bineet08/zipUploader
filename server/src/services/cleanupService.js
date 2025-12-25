@@ -19,27 +19,26 @@ export async function cleanupStaleUploads() {
     );
 
     for (const { id } of uploads) {
+        const conn = await db.getConnection();
         try {
-            // 1️⃣ Delete file if exists
             const filePath = path.join(UPLOAD_DIR, id);
+
             if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
+                await fs.promises.unlink(filePath).catch(() => { });
             }
 
-            // 2️⃣ Delete DB rows (order matters)
-            await db.execute(
-                `DELETE FROM chunks WHERE upload_id=?`,
-                [id]
-            );
+            await conn.beginTransaction();
 
-            await db.execute(
-                `DELETE FROM uploads WHERE id=?`,
-                [id]
-            );
+            await conn.execute(`DELETE FROM chunks WHERE upload_id=?`, [id]);
+            await conn.execute(`DELETE FROM uploads WHERE id=?`, [id]);
 
+            await conn.commit();
             console.log(`🗑️ Removed stale upload ${id}`);
         } catch (err) {
+            await conn.rollback();
             console.error(`Cleanup failed for ${id}`, err);
+        } finally {
+            conn.release();
         }
     }
 

@@ -88,7 +88,18 @@ export function useUploader() {
                     index: item.index
                 });
 
-                uploadedBytesRef.current += blob.size;
+                setChunks(prev => {
+                    const target = prev.find(c => c.index === item.index);
+
+                    // ⛔ chunk already completed earlier → do NOT add bytes
+                    if (target?.status === "success") return prev;
+
+                    uploadedBytesRef.current += blob.size;
+                    return prev.map(c =>
+                        c.index === item.index ? { ...c, status: "success" } : c
+                    );
+                });
+
 
                 const sessionBytes = uploadedBytesRef.current - sessionStartBytesRef.current;
                 const elapsed = Math.max(
@@ -166,7 +177,7 @@ export function useUploader() {
                 );
 
 
-                
+
                 if (!statusRes.ok) {
                     throw new Error(`Status check failed: ${statusRes.statusText}`);
                 }
