@@ -1,14 +1,14 @@
+import { useUploader } from "./hooks/useUploader";
 import UploadDashboard from "./components/UploadDashboard";
-import React from 'react'
 import { Toaster } from "react-hot-toast";
 
-const App = () => {
-  return (
-    <div>
-      <UploadDashboard />
-      <Toaster />
-    </div>
-  )
-}
+export default function App() {
+  const uploader = useUploader();
 
-export default App
+  return (
+    <>
+      <UploadDashboard {...uploader} />
+      <Toaster position="bottom-right" />
+    </>
+  );
+}
