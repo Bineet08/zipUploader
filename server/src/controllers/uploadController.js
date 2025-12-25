@@ -20,18 +20,35 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 
 export async function initUpload(req, res) {
     const { filename, size } = req.body;
+    const fileKey = `${filename}:${size}`;
+    const totalChunks = Math.ceil(size / CHUNK_SIZE);
 
-    if (!filename || !size) {
-        return res.status(400).json({ error: "Invalid payload" });
+    // 1. Check if upload already exists
+    const [[existing]] = await db.execute(
+        `SELECT id FROM uploads WHERE file_key=?`,
+        [fileKey]
+    );
+
+    if (existing) {
+        const [rows] = await db.execute(
+            `SELECT chunk_index FROM chunks
+       WHERE upload_id=? AND status='SUCCESS'`,
+            [existing.id]
+        );
+
+        return res.json({
+            uploadId: existing.id,
+            receivedChunks: rows.map(r => r.chunk_index)
+        });
     }
 
-    const totalChunks = Math.ceil(size / CHUNK_SIZE);
+    // 2. Create new upload
     const uploadId = crypto.randomUUID();
 
     await db.execute(
-        `INSERT INTO uploads (id, filename, total_size, total_chunks)
-     VALUES (?, ?, ?, ?)`,
-        [uploadId, filename, size, totalChunks]
+        `INSERT INTO uploads (id, file_key, filename, total_size, total_chunks)
+     VALUES (?, ?, ?, ?, ?)`,
+        [uploadId, fileKey, filename, size, totalChunks]
     );
 
     for (let i = 0; i < totalChunks; i++) {
@@ -44,6 +61,7 @@ export async function initUpload(req, res) {
 
     res.json({ uploadId, receivedChunks: [] });
 }
+
 
 /* ================= CHUNK RECEIVER ================= */
 
@@ -122,3 +140,40 @@ export async function chunkReceiver(req, res) {
         res.sendStatus(500);
     }
 }
+
+export async function uploadStatus(req, res) {
+    const { filename, size } = req.query;
+
+    if (!filename || !size) {
+        return res.status(400).json({
+            error: "filename and size are required"
+        });
+    }
+
+    const fileKey = `${filename}:${size}`;
+
+    const [[upload]] = await db.execute(
+        `SELECT id FROM uploads WHERE file_key=?`,
+        [fileKey]
+    );
+
+    if (!upload) {
+        return res.json({
+            exists: false,
+            receivedChunks: []
+        });
+    }
+
+    const [rows] = await db.execute(
+        `SELECT chunk_index FROM chunks
+     WHERE upload_id=? AND status='SUCCESS'`,
+        [upload.id]
+    );
+
+    res.json({
+        exists: true,
+        uploadId: upload.id,
+        receivedChunks: rows.map(r => r.chunk_index)
+    });
+}
+

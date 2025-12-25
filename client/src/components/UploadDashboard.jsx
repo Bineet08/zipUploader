@@ -1,202 +1,93 @@
-import { useEffect, useRef, useState } from "react";
-import ProgressBar from "./ProgressBar";
-import ChunkGrid from "./ChunkGrid";
-import FinalSummary from "./FinalSummary";
+export default function UploadDashboard({ uploader }) {
+    const { chunks, progress, speed, eta, isPaused } = uploader;
+    const isComplete = progress === 100 && chunks.length > 0;
+    const formatTime = (seconds) => {
+        if (!seconds || !isFinite(seconds)) return "--";
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}m ${secs}s`;
+    };
 
-export default function UploadDashboard({
-    uploadFile,
-    pause,
-    resume,
-    isPaused,
-    chunks = [],
-    progress = 0,
-    speed = 0,
-    eta = 0,
-    uploadId,
-    autoStartFile,
-    compact = false
-}) {
-    /* ---------- AUTO START (STRICT-MODE SAFE) ---------- */
-    const startedRef = useRef(false);
+    const formatSpeed = (mbps) => {
+        if (mbps >= 1) return `${mbps.toFixed(1)} MB/s`;
+        return `${(mbps * 1024).toFixed(0)} KB/s`;
+    };
 
-    useEffect(() => {
-        if (autoStartFile && !startedRef.current) {
-            startedRef.current = true;
-            uploadFile(autoStartFile);
-        }
-    }, [autoStartFile, uploadFile]);
-    const [showChunks, setShowChunks] = useState(false);
+    const success = chunks.filter(c => c.status === "success").length;
+    const errors = chunks.filter(c => c.status === "error").length;
 
-
-    /* ---------- DROPDOWN STATE ---------- */
-
-    /* ---------- STATE DERIVATIONS ---------- */
-    const isIdle = chunks.length === 0;
-
-    const isCompleted =
-        chunks.length > 0 &&
-        chunks.every(c => c.status === "success");
-
-    const hasError = chunks.some(c => c.status === "error");
-
-    const totalChunks = chunks.length;
-    const successChunks = chunks.filter(c => c.status === "success").length;
-    const pendingChunks = chunks.filter(c => c.status === "pending").length;
-    const errorChunks = chunks.filter(c => c.status === "error").length;
-
-    const statusLabel = isIdle
-        ? "Idle"
-        : isCompleted
-            ? "Completed"
-            : isPaused
-                ? "Paused"
-                : "Uploading";
-
-    const statusColor = isIdle
-        ? "bg-slate-100 text-slate-600"
-        : isCompleted
-            ? "bg-emerald-100 text-emerald-700"
-            : isPaused
-                ? "bg-yellow-100 text-yellow-700"
-                : "bg-blue-100 text-blue-700";
-
-    /* ---------- RENDER ---------- */
+    // Full dashboard view
     return (
-        <div className="space-y-4">
+        <div className="space-y-4 p-6 bg-white rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between">
+                <h3 className="font-medium text-slate-800">Upload Progress</h3>
+                <span className="text-2xl font-bold text-blue-600">{progress}%</span>
+            </div>
 
-            {/* ---------- HEADER (hidden in compact mode) ---------- */}
-            {!compact && (
-                <div className="flex items-center justify-between">
-                    <h2 className="text-lg font-semibold text-slate-800">
-                        File Upload
-                    </h2>
-                    <span
-                        className={`px-3 py-1 rounded-full text-xs font-medium ${statusColor}`}
-                    >
-                        {statusLabel}
-                    </span>
-                </div>
-            )}
-
-            {/* ---------- IDLE STATE ---------- */}
-            {isIdle && !autoStartFile && (
-                <input
-                    type="file"
-                    onChange={e => uploadFile(e.target.files[0])}
-                    className="block w-full text-sm
-            file:mr-4 file:py-2 file:px-4
-            file:rounded-lg file:border-0
-            file:bg-blue-600 file:text-white
-            hover:file:bg-blue-700"
+            {/* Progress Bar */}
+            <div className="relative h-3 bg-slate-100 rounded-full overflow-hidden">
+                <div
+                    className="absolute inset-y-0 left-0 bg-linear-to-r from-blue-500 to-blue-600 transition-all duration-300"
+                    style={{ width: `${progress}%` }}
                 />
-            )}
+            </div>
 
-            {/* ---------- PROGRESS ---------- */}
-            {!isIdle && (
-                <>
-                    <ProgressBar value={progress} />
-
-                    <div className="flex justify-between text-xs text-slate-600">
-                        <span>{progress}%</span>
-                        <span>{speed.toFixed(2)} MB/s</span>
-                        <span>
-                            ETA {isFinite(eta) ? Math.round(eta) : "--"}s
-                        </span>
+            {/* Stats Grid */}
+            <div className="grid grid-cols-3 gap-4">
+                <div className="text-center">
+                    <div className="text-xs text-slate-500">Speed</div>
+                    <div className="text-sm font-semibold text-slate-800">
+                        {formatSpeed(speed)}
                     </div>
-                </>
-            )}
-
-            {/* ---------- CONTROLS + DROPDOWN TOGGLE ---------- */}
-            {!isCompleted && !isIdle && (
-                <div className="flex items-center gap-2">
-                    <button
-                        onClick={pause}
-                        disabled={isPaused}
-                        className="px-3 py-1.5 rounded-md
-              bg-yellow-500 text-white text-xs
-              disabled:opacity-40"
-                    >
-                        Pause
-                    </button>
-
-                    <button
-                        onClick={resume}
-                        disabled={!isPaused}
-                        className="px-3 py-1.5 rounded-md
-              bg-blue-600 text-white text-xs
-              disabled:opacity-40"
-                    >
-                        Resume
-                    </button>
-
-                    {/* ---------- CHUNK DROPDOWN BUTTON ---------- */}
-                    <button
-                        onClick={() => setShowChunks(v => !v)}
-                        className="ml-auto text-xs text-slate-600 hover:text-slate-800 flex items-center gap-1"
-                    >
-                        Chunks ({totalChunks})
-                        <span>{showChunks ? "▲" : "▼"}</span>
-                    </button>
                 </div>
-            )}
-
-            {/* ---------- CHUNK DROPDOWN ---------- */}
-            {showChunks && !isIdle && !isCompleted && (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
-
-                    {/* ---------- DROPDOWN HEADER ---------- */}
-                    <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium text-slate-700">
-                            Chunk Details
-                        </span>
+                <div className="text-center">
+                    <div className="text-xs text-slate-500">ETA</div>
+                    <div className="text-sm font-semibold text-slate-800">
+                        {formatTime(eta)}
+                    </div>
+                </div>
+                <div className="text-center">
+                    <div className="text-xs text-slate-500">Chunks</div>
+                    <div className="text-sm font-semibold text-slate-800">
+                        {success}/{chunks.length}
+                    </div>
+                </div>
+            </div>
+            {/* Controls */}
+            <div className="flex gap-2">
+                {isComplete ? (
+                    <button
+                        disabled={true}
+                        className="flex-1 px-4 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg font-medium transition-colors"
+                    >
+                        Success
+                    </button>
+                ) :
+                    !isPaused ? (
                         <button
-                            onClick={() => setShowChunks(false)}
-                            className="text-xs text-slate-500 hover:text-slate-800"
+                            onClick={uploader.pause}
+                            className="flex-1 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors"
                         >
-                            Close ✕
+                            ⏸ Pause
                         </button>
-                    </div>
-
-                    {/* ---------- COUNTS ---------- */}
-                    <div className="flex justify-between text-xs text-slate-700">
-                        <span>Total</span>
-                        <span>{totalChunks}</span>
-                    </div>
-
-                    <div className="flex justify-between text-xs text-emerald-700">
-                        <span>Completed</span>
-                        <span>{successChunks}</span>
-                    </div>
-
-                    <div className="flex justify-between text-xs text-slate-600">
-                        <span>Pending</span>
-                        <span>{pendingChunks}</span>
-                    </div>
-
-                    {errorChunks > 0 && (
-                        <div className="flex justify-between text-xs text-red-600">
-                            <span>Failed</span>
-                            <span>{errorChunks}</span>
-                        </div>
+                    ) : (
+                        <button
+                            onClick={uploader.resume}
+                            className="flex-1 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg font-medium transition-colors"
+                        >
+                            ▶ Resume
+                        </button>
                     )}
 
-                    {/* ---------- GRID ---------- */}
-                    <ChunkGrid chunks={chunks} />
-                </div>
-            )}
-
-
-            {/* ---------- ERROR ---------- */}
-            {hasError && !isCompleted && (
-                <div className="text-xs text-red-600">
-                    Some chunks failed. Resume to retry.
-                </div>
-            )}
-
-            {/* ---------- FINAL SUMMARY ---------- */}
-            {isCompleted && (
-                <FinalSummary uploadId={uploadId} />
-            )}
+                {errors > 0 && (
+                    <button
+                        onClick={uploader.retry}
+                        className="flex-1 px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg font-medium transition-colors"
+                    >
+                        🔄 Retry Failed
+                    </button>
+                )}
+            </div>
         </div>
     );
 }

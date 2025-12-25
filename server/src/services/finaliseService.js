@@ -4,7 +4,10 @@ import crypto from "crypto";
 import unzipper from "unzipper";
 import { db } from "../config/db.js";
 
+const UPLOAD_DIR = path.resolve("uploads");
+
 export async function finaliseUpload(uploadId) {
+    /* ---------- LOCK ROW & MOVE TO PROCESSING ---------- */
     const conn = await db.getConnection();
     await conn.beginTransaction();
 
@@ -27,50 +30,57 @@ export async function finaliseUpload(uploadId) {
     await conn.commit();
     conn.release();
 
-    const filePath = path.resolve("uploads", uploadId);
+    const filePath = path.join(UPLOAD_DIR, uploadId);
 
-    // ---------------- HASHING ----------------
-    const hash = crypto.createHash("sha256");
-    const readStream = fs.createReadStream(filePath);
+    /* ---------- COMPUTE FINAL HASH ---------- */
+    let finalHash;
+    try {
+        const hash = crypto.createHash("sha256");
 
-    readStream.on("error", async err => {
-        console.error("File read error:", err);
+        await new Promise((resolve, reject) => {
+            const stream = fs.createReadStream(filePath);
+            stream.on("data", chunk => hash.update(chunk));
+            stream.on("end", resolve);
+            stream.on("error", reject);
+        });
+
+        finalHash = hash.digest("hex");
+    } catch (err) {
+        console.error("Hashing failed:", err);
         await db.execute(
             `UPDATE uploads SET status='FAILED' WHERE id=?`,
             [uploadId]
         );
-    });
+        return;
+    }
 
-    readStream.pipe(hash);
+    /* ---------- OPTIONAL ZIP PEEK (NON-BLOCKING) ---------- */
+    try {
+        await new Promise(resolve => {
+            fs.createReadStream(filePath)
+                .pipe(unzipper.Parse())
+                .on("entry", entry => {
+                    if (!entry.path.includes("/")) {
+                        console.log("Top-level ZIP entry:", entry.path);
+                    }
+                    entry.autodrain();
+                })
+                .on("error", () => resolve()) // Not a ZIP → ignore
+                .on("close", resolve);
+        });
+    } catch {
+        // Intentionally ignored
+    }
 
-    readStream.on("end", async () => {
-        const finalHash = hash.digest("hex");
-
-        // Save hash immediately
-        await db.execute(
-            `UPDATE uploads SET final_hash=? WHERE id=?`,
-            [finalHash, uploadId]
-        );
-
-        // ---------------- ZIP PEEK (NON-BLOCKING) ----------------
-        fs.createReadStream(filePath)
-            .pipe(unzipper.Parse())
-            .on("entry", entry => {
-                if (!entry.path.includes("/")) {
-                    console.log("Top-level ZIP entry:", entry.path);
-                }
-                entry.autodrain();
-            })
-            .on("error", err => {
-                // Not a ZIP — this is OK
-                console.warn("ZIP peek skipped:", err.message);
-            })
-            .on("close", async () => {
-                // Always mark completed
-                await db.execute(
-                    `UPDATE uploads SET status='COMPLETED' WHERE id=?`,
-                    [uploadId]
-                );
-            });
-    });
+    /* ---------- FINAL AUTHORITATIVE UPDATE ---------- */
+    await db.execute(
+        `
+        UPDATE uploads
+        SET status='COMPLETED',
+            final_hash=?,
+            completed_at=NOW()
+        WHERE id=?
+        `,
+        [finalHash, uploadId]
+    );
 }
