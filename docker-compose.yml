@@ -1,0 +1,54 @@
+services:
+  upload_mysql:
+    image: mysql:8.0
+    container_name: upload_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: Ankit@09
+      MYSQL_DATABASE: chunk_upload
+      MYSQL_USER: uploader
+      MYSQL_PASSWORD: Aka@0908
+    ports:
+      - "3307:3306" # host:container (avoid clash with local MySQL)
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./server/sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  upload_backend:
+    build: ./server
+    container_name: upload_backend
+    restart: unless-stopped
+    depends_on:
+      upload_mysql:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      NODE_ENV: development
+      DB_HOST: upload_mysql # ✅ service name, NOT localhost
+      DB_USER: uploader
+      DB_PASSWORD: Aka@0908
+      DB_NAME: chunk_upload
+      CLIENT: http://localhost:5173
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./server/uploads:/app/uploads
+
+  upload_frontend:
+    build: ./client
+    container_name: upload_frontend
+    restart: unless-stopped
+    depends_on:
+      - upload_backend
+    environment:
+      VITE_API_URL: http://localhost:4000
+    ports:
+      - "5173:5173"
+
+volumes:
+  mysql_data:

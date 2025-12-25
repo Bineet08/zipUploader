@@ -165,6 +165,8 @@ export function useUploader() {
                     )}&size=${file.size}`
                 );
 
+
+                
                 if (!statusRes.ok) {
                     throw new Error(`Status check failed: ${statusRes.statusText}`);
                 }

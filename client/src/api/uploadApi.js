@@ -1,5 +1,7 @@
+const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:4000";
+
 export async function initUpload(file) {
-    const res = await fetch("http://localhost:4000/upload/init", {
+    const res = await fetch(`${API_BASE}/upload/init`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -7,6 +9,12 @@ export async function initUpload(file) {
             size: file.size
         })
     });
+
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Init upload failed: ${text}`);
+    }
+
     return res.json();
 }
 
@@ -16,10 +24,13 @@ export async function uploadChunk({ uploadId, chunk, index }) {
     form.append("uploadId", uploadId);
     form.append("chunkIndex", index);
 
-    const res = await fetch("http://localhost:4000/upload/chunk", {
+    const res = await fetch(`${API_BASE}/upload/chunk`, {
         method: "POST",
         body: form
     });
 
-    if (!res.ok) throw new Error("Chunk upload failed");
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Chunk upload failed: ${text}`);
+    }
 }

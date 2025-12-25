@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS uploads (
+  id CHAR(36) PRIMARY KEY,
+  file_key VARCHAR(255) NOT NULL UNIQUE,
+  filename VARCHAR(255) NOT NULL,
+  total_size BIGINT NOT NULL,
+  total_chunks INT NOT NULL,
+  status ENUM('UPLOADING','PROCESSING','COMPLETED','FAILED') DEFAULT 'UPLOADING',
+  final_hash CHAR(64),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  completed_at TIMESTAMP NULL
+);
+
+CREATE TABLE IF NOT EXISTS chunks (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  upload_id CHAR(36) NOT NULL,
+  chunk_index INT NOT NULL,
+  status ENUM('PENDING','SUCCESS','FAILED') DEFAULT 'PENDING',
+  received_at TIMESTAMP NULL,
+  UNIQUE KEY uniq_chunk (upload_id, chunk_index),
+  FOREIGN KEY (upload_id) REFERENCES uploads(id) ON DELETE CASCADE
+);

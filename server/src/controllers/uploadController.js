@@ -23,44 +23,40 @@ export async function initUpload(req, res) {
     const fileKey = `${filename}:${size}`;
     const totalChunks = Math.ceil(size / CHUNK_SIZE);
 
-    // 1. Check if upload already exists
-    const [[existing]] = await db.execute(
+    const generatedId = crypto.randomUUID();
+
+    // Atomic insert (no race)
+    await db.execute(
+        `
+    INSERT INTO uploads (id, file_key, filename, total_size, total_chunks)
+    VALUES (?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE id = id
+    `,
+        [generatedId, fileKey, filename, size, totalChunks]
+    );
+
+    // Always fetch the canonical upload
+    const [[upload]] = await db.execute(
         `SELECT id FROM uploads WHERE file_key=?`,
         [fileKey]
     );
 
-    if (existing) {
-        const [rows] = await db.execute(
-            `SELECT chunk_index FROM chunks
-       WHERE upload_id=? AND status='SUCCESS'`,
-            [existing.id]
-        );
-
-        return res.json({
-            uploadId: existing.id,
-            receivedChunks: rows.map(r => r.chunk_index)
-        });
-    }
-
-    // 2. Create new upload
-    const uploadId = crypto.randomUUID();
-
-    await db.execute(
-        `INSERT INTO uploads (id, file_key, filename, total_size, total_chunks)
-     VALUES (?, ?, ?, ?, ?)`,
-        [uploadId, fileKey, filename, size, totalChunks]
+    // Fetch completed chunks
+    const [rows] = await db.execute(
+        `
+    SELECT chunk_index
+    FROM chunks
+    WHERE upload_id=? AND status='SUCCESS'
+    `,
+        [upload.id]
     );
 
-    for (let i = 0; i < totalChunks; i++) {
-        await db.execute(
-            `INSERT INTO chunks (upload_id, chunk_index)
-       VALUES (?, ?)`,
-            [uploadId, i]
-        );
-    }
-
-    res.json({ uploadId, receivedChunks: [] });
+    res.json({
+        uploadId: upload.id,
+        receivedChunks: rows.map(r => r.chunk_index)
+    });
 }
+
 
 
 /* ================= CHUNK RECEIVER ================= */
