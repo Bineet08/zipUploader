@@ -32,6 +32,7 @@ export function useUploader() {
     const pausedRef = useRef(false);
     const cancelledRef = useRef(false);
     const completionShownRef = useRef(false);
+    const countedChunksRef = useRef(new Set());
 
     /* ---------------- LIFECYCLE ---------------- */
 
@@ -51,7 +52,7 @@ export function useUploader() {
             chunks.length > 0 && chunks.every(c => c.status === "success");
 
         if (done && !completionShownRef.current) {
-            toast.success("Upload completed 🎉");
+            toast.success("Upload completed ");
             completionShownRef.current = true;
         }
     }, [chunks]);
@@ -88,17 +89,11 @@ export function useUploader() {
                     index: item.index
                 });
 
-                setChunks(prev => {
-                    const target = prev.find(c => c.index === item.index);
-
-                    // ⛔ chunk already completed earlier → do NOT add bytes
-                    if (target?.status === "success") return prev;
-
+                if (!countedChunksRef.current.has(item.index)) {
                     uploadedBytesRef.current += blob.size;
-                    return prev.map(c =>
-                        c.index === item.index ? { ...c, status: "success" } : c
-                    );
-                });
+                    countedChunksRef.current.add(item.index);
+                }
+
 
 
                 const sessionBytes = uploadedBytesRef.current - sessionStartBytesRef.current;
@@ -110,7 +105,9 @@ export function useUploader() {
 
                 setSpeed(bps / (1024 * 1024));
                 setProgress(
-                    Math.round((uploadedBytesRef.current / fileRef.current.size) * 100)
+                    Math.min(100,
+                        Math.round((uploadedBytesRef.current / fileRef.current.size) * 100)
+                    )
                 );
 
                 const remaining = fileRef.current.size - uploadedBytesRef.current;
@@ -155,6 +152,7 @@ export function useUploader() {
                 completionShownRef.current = false;
                 cancelledRef.current = false;
                 pausedRef.current = false;
+                countedChunksRef.current.clear();
 
                 activeRef.current = 0;
                 uploadedBytesRef.current = 0;
@@ -244,30 +242,36 @@ export function useUploader() {
     }, []);
 
     const resume = useCallback(() => {
-        if (!fileRef.current) {
-            toast.error("No file to resume");
-            return;
-        }
+    if (!fileRef.current) {
+        toast.error("No file to resume");
+        return;
+    }
 
-        pausedRef.current = false;
-        setIsPaused(false);
+    pausedRef.current = false;
+    setIsPaused(false);
 
-        setChunks(prev => {
-            queueRef.current = prev.filter(
-                c => c.status === "pending" || c.status === "error"
-            );
-            return prev;
-        });
+    setChunks(prev => {
+        queueRef.current = prev.filter(
+            c => c.status === "pending" || c.status === "error"
+        );
+        return prev;
+    });
 
-        sessionStartBytesRef.current = uploadedBytesRef.current;
-        startTimeRef.current = performance.now();
+    // Re-sync counted chunks from state
+    chunks
+      .filter(c => c.status === "success")
+      .forEach(c => countedChunksRef.current.add(c.index));
 
-        toast("Resumed ▶️");
+    sessionStartBytesRef.current = uploadedBytesRef.current;
+    startTimeRef.current = performance.now();
 
-        for (let i = 0; i < MAX_CONCURRENCY; i++) {
-            runWorker();
-        }
-    }, [runWorker]);
+    toast("Resumed ▶️");
+
+    for (let i = 0; i < MAX_CONCURRENCY; i++) {
+        runWorker();
+    }
+}, [runWorker, chunks]);
+
 
     const cancel = useCallback(() => {
         cancelledRef.current = true;
