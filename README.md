@@ -130,6 +130,64 @@ VITE_API_URL=http://localhost:4000
 - Progress exceeding 100% → prevented
 
 - Partial uploads → cleaned automatically
+- ## Failure Scenarios & System Guarantees
+
+This system is designed to be **robust under real-world failure conditions**.  
+Below is a detailed explanation of how each required scenario is handled.
+
+---
+
+### 1. Double-Finalize (Two “final chunk” requests arrive simultaneously)
+
+**Problem:**  
+Two chunk uploads may both believe they are the last chunk and attempt to finalize the upload.
+
+**Solution:**  
+- Each chunk is uniquely identified using a database constraint:  
+  `UNIQUE(upload_id, chunk_index)`
+- Finalization is triggered **only after** checking that no pending chunks remain.
+- The `finaliseUpload` process uses a database row lock (`SELECT ... FOR UPDATE`) and
+  transitions the upload status from `UPLOADING → PROCESSING → COMPLETED`.
+
+**Guarantee:**  
+Even if multiple requests arrive simultaneously, **only one finalize operation succeeds**.
+All others exit safely without corrupting state.
+
+✅ Race-condition safe  
+✅ Idempotent finalization  
+
+---
+
+### 2. Network Flapping (30% chunk upload failure)
+
+**Problem:**  
+Chunk uploads may randomly fail due to unstable network conditions.
+
+**Solution:**  
+- The frontend retries failed chunk uploads using **exponential backoff**:
+  - 1s → 2s → 4s delays
+- Each chunk has a maximum retry limit.
+- Failed chunks are marked as `error` and can be retried manually.
+
+**Guarantee:**  
+Temporary network failures do not break uploads, and retries do not overload the server.
+
+✅ Exponential backoff implemented  
+✅ Retry-safe and user-recoverable  
+
+---
+
+### 3. Out-of-Order Delivery (Chunk 10 arrives before Chunk 2)
+
+**Problem:**  
+Chunks may arrive in any order due to concurrency or retries.
+
+**Solution:**  
+- The backend **never appends chunks sequentially**.
+- Each chunk is written directly to its correct byte offset:
+  ```js
+  start = chunkIndex * CHUNK_SIZE
+
 ## Authors
 
 - [Bineet Gupta](https://www.github.com/bineet08)
